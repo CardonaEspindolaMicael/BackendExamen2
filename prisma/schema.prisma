@@ -1,0 +1,63 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Rol {
+  id          String       @id @default(uuid())
+  cargo       String    @unique
+  descripcion String    
+  usuarios    Usuario[]
+}
+
+model Usuario {
+  ci          String         @id
+  nombre      String
+  apellidos   String
+  correo      String         @unique
+  sexo        String
+  contrasena  String
+  telefono    String         @unique
+  idRol       String
+  rol         Rol            @relation(fields: [idRol], references: [id], onUpdate: Cascade, onDelete: Restrict)
+
+  salas       UsuarioSala[]  @relation("UsuarioSalaUsuario") // Relación inversa
+  salasHost   Sala[]         @relation("UsuarioSalas")        // Host de salas
+}
+
+model Sala {
+  id          String              @id @default(uuid())
+  nombre      String
+  capacidad   Int
+  descripcion String
+  esPrivada   Boolean
+  diagrama    Json
+  ciHost      String
+
+  host        Usuario             @relation("UsuarioSalas", fields: [ciHost], references: [ci], onUpdate: Cascade, onDelete: Restrict)
+  usuarios    UsuarioSala[]       @relation("UsuarioSalaSala")
+}
+
+model UsuarioSala {
+  id        String   @id @default(uuid())
+  ciUsuario String
+  idSala    String
+  rol       String   // ejemplo: "participante", "moderador"
+  fecha     DateTime @default(now())
+
+  usuario   Usuario  @relation("UsuarioSalaUsuario", fields: [ciUsuario], references: [ci], onUpdate: Cascade, onDelete: Cascade)
+  sala      Sala     @relation("UsuarioSalaSala", fields: [idSala], references: [id], onUpdate: Cascade, onDelete: Cascade)
+
+  @@unique([ciUsuario, idSala]) // Previene duplicados
+}

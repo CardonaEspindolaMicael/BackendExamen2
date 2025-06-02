@@ -1,6 +1,13 @@
 import { GoogleGenAI } from "@google/genai";
 import axios from "axios";
-import fs from "fs";
+//import fs from "fs";
+import fs from "fs-extra";
+import path from "path";
+import archiver from "archiver";
+import { fileURLToPath } from "url";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 
 export const getModelGemini = async (req, res) => {
   try {
@@ -90,3 +97,116 @@ Return ONLY the complete HTML code with no explanations, introductions, or any o
       res.status(500).json({ error: "Failed to process image", details: error.message });
     }
   }
+
+export async function getZipGenerate(req, res) {
+  const { dartCode } = req.body;
+
+  const templatePath = path.join(__dirname, "flutter");
+  const tempProjectPath = path.join(__dirname, `temp_${Date.now()}`); // Nombre único
+
+  try {
+    // Verificar que la plantilla existe
+    if (!await fs.pathExists(templatePath)) {
+      return res.status(500).json({ error: "Template folder not found" });
+    }
+
+    // Copiar plantilla
+    await fs.copy(templatePath, tempProjectPath);
+    console.log("Plantilla copiada de:", templatePath);
+    console.log("A carpeta temporal:", tempProjectPath);
+
+    // Buscar la ruta correcta de main.dart
+    const mainPath = path.join(tempProjectPath, "lib", "main.dart");
+    console.log("Ruta de main.dart:", mainPath);
+
+    // Verificar si existe main.dart
+    if (!await fs.pathExists(mainPath)) {
+      console.log("main.dart no encontrado en lib/, buscando en subcarpetas...");
+      
+      // Buscar en posibles ubicaciones
+      const possiblePaths = [
+        path.join(tempProjectPath, "my_skeleton", "lib", "main.dart"),
+        path.join(tempProjectPath, "flutter_app", "lib", "main.dart")
+      ];
+      
+      let foundPath = null;
+      for (const possiblePath of possiblePaths) {
+        if (await fs.pathExists(possiblePath)) {
+          foundPath = possiblePath;
+          break;
+        }
+      }
+      
+      if (!foundPath) {
+        throw new Error("No se encontró main.dart en la estructura del proyecto");
+      }
+      
+      console.log("main.dart encontrado en:", foundPath);
+      await fs.writeFile(foundPath, dartCode, "utf8");
+    } else {
+      await fs.writeFile(mainPath, dartCode, "utf8");
+    }
+
+    console.log("Archivo main.dart actualizado correctamente");
+
+    // Configurar headers
+    res.setHeader("Content-Type", "application/zip");
+    res.setHeader("Content-Disposition", "attachment; filename=flutter_project.zip");
+
+    // Crear el ZIP usando Promise para manejar correctamente la finalización
+    await new Promise((resolve, reject) => {
+      const archive = archiver("zip", { zlib: { level: 9 } });
+      
+      // Manejar errores del archive
+      archive.on('error', (err) => {
+        console.error('Error en archive:', err);
+        reject(err);
+      });
+
+      // Manejar warnings del archive
+      archive.on('warning', (err) => {
+        console.warn('Warning en archive:', err);
+      });
+
+      // Cuando termine de escribir todos los datos
+      archive.on('end', () => {
+        console.log('Archive finalized successfully');
+        console.log('Total bytes:', archive.pointer());
+        resolve();
+      });
+
+      // Pipe al response
+      archive.pipe(res);
+
+      // Agregar el directorio al ZIP
+      archive.directory(tempProjectPath, false);
+
+      // Finalizar el archive
+      archive.finalize();
+    });
+
+    console.log("ZIP enviado correctamente");
+
+  } catch (err) {
+    console.error("Error en getZipGenerate:", err);
+    
+    if (!res.headersSent) {
+      res.status(500).json({ 
+        error: "Error al generar el proyecto", 
+        details: err.message 
+      });
+    }
+  } finally {
+    // Limpieza siempre se ejecuta
+    if (await fs.pathExists(tempProjectPath)) {
+      setTimeout(async () => {
+        try {
+          await fs.remove(tempProjectPath);
+          console.log("Carpeta temporal eliminada:", tempProjectPath);
+        } catch (cleanupError) {
+          console.error("Error al limpiar:", cleanupError);
+        }
+      }, 2000); // 2 segundos de delay
+    }
+  }
+}

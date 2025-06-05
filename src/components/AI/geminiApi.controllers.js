@@ -98,11 +98,159 @@ Return ONLY the complete HTML code with no explanations, introductions, or any o
     }
   }
 
+
+
+export const postHtmlToDart = async (req, res) => {
+  try {
+    const { apiKey } = req.params;
+    const { htmlCode } = req.body;
+
+    // Validate input
+    if (!htmlCode || !Array.isArray(htmlCode)) {
+      return res.status(400).json({ 
+        error: "Please provide htmlCode as an array of page objects." 
+      });
+    }
+
+    if (!apiKey) {
+      return res.status(400).json({ 
+        error: "API key is required." 
+      });
+    }
+
+    // Initialize Gemini API with provided key (using same pattern as your imgToHtml endpoint)
+    // OR: import { GoogleGenAI } from "@google/genai";
+    
+    const ai = new GoogleGenAI({ apiKey });
+
+    // Create the enhanced Gemini prompt
+    const prompt = `You are an expert Flutter developer. Convert the following HTML/CSS pages into Flutter Dart code.
+
+**INPUT FORMAT:**
+I will provide a JSON array with pages in this format:
+[
+  {
+    "id": "page-1",
+    "name": "Home Page", 
+    "html": "<body>...HTML content...</body>",
+    "css": "...CSS content..."
+  }
+]
+
+**CONVERSION RULES:**
+
+1. **HTML to Flutter Widget Mapping:**
+   - <div> → Container, Column, Row (based on CSS classes)
+   - <input> → TextField, TextFormField
+   - <button> → ElevatedButton, OutlinedButton, TextButton
+   - <label> → Text widget
+   - <span> → Text widget
+   - <svg> → Icon widget or custom painter
+
+2. **CSS/Tailwind to Flutter Styling:**
+   - flex → Column/Row with MainAxis/CrossAxis alignment
+   - bg-color → Container decoration with color
+   - text-color → TextStyle color
+   - padding/margin → EdgeInsets
+   - border-radius → BorderRadius
+   - shadow → BoxShadow
+   - Media queries → MediaQuery.of(context).size.width conditions
+
+3. **Layout Guidelines:**
+   - Use Scaffold as root widget
+   - Wrap content in SafeArea if needed
+   - Use SingleChildScrollView for scrollable content
+   - Implement responsive design with MediaQuery
+   - Use proper Flutter color constants (Colors.blue, Color(0xFF...))
+
+4. **Code Quality:**
+   - Use StatelessWidget unless state management is clearly needed
+   - Add proper imports
+   - Use meaningful widget names based on page names
+   - Add basic comments for complex layouts
+   - Follow Flutter naming conventions (PascalCase for classes)
+
+**OUTPUT FORMAT:**
+Return ONLY a valid JSON array (no markdown, no explanation):
+
+[
+  {
+    "id": "page-1",
+    "name": "Home Page",
+    "flutterCode": "import 'package:flutter/material.dart'; class HomePage extends StatelessWidget { @override Widget build(BuildContext context) { return Scaffold( body: SafeArea( child: // your widgets here ), ); } }"
+  }
+]
+
+**IMPORTANT:** 
+- Return Flutter code as a SINGLE LINE string with NO line breaks or \\n characters
+- Use single spaces between code elements instead of newlines
+- Escape quotes as \\" only
+- Make responsive layouts using MediaQuery
+- Don't add extra explanations, just return the JSON array
+- Keep all Flutter code in one continuous line per flutterCode field
+
+**INPUT DATA TO CONVERT:**
+${JSON.stringify(htmlCode, null, 2)}`;
+
+    // Generate content from Gemini (using same pattern as your imgToHtml)
+    const response = await ai.models.generateContent({
+      model: "gemini-1.5-flash", // or "gemini-2.0-flash" if that's what works for you
+      contents: [{ text: prompt }],
+    });
+    let generatedText = response.text;
+
+    // Clean up the response - remove markdown code blocks if present
+    generatedText = generatedText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+    // Try to parse as JSON to validate
+    let parsedResponse;
+    try {
+      parsedResponse = JSON.parse(generatedText);
+    } catch (parseError) {
+      // If parsing fails, try to extract JSON from the response
+      const jsonMatch = generatedText.match(/\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          parsedResponse = JSON.parse(jsonMatch[0]);
+        } catch (secondParseError) {
+          return res.status(500).json({ 
+            error: "Failed to parse AI response as JSON", 
+            details: secondParseError.message,
+            rawResponse: generatedText 
+          });
+        }
+      } else {
+        return res.status(500).json({ 
+          error: "No valid JSON found in AI response", 
+          rawResponse: generatedText 
+        });
+      }
+    }
+
+    // Validate the response structure
+    if (!Array.isArray(parsedResponse)) {
+      return res.status(500).json({ 
+        error: "AI response is not an array", 
+        response: parsedResponse 
+      });
+    }
+
+    // Send the parsed response
+    res.json(parsedResponse);
+
+  } catch (error) {
+    console.error("Error processing code:", error);
+    res.status(500).json({ 
+      error: "Failed to process code", 
+      details: error.message 
+    });
+  }
+};
 export async function getZipGenerate(req, res) {
   const { dartCode } = req.body;
 
   const templatePath = path.join(__dirname, "flutter");
-  const tempProjectPath = path.join(__dirname, `temp_${Date.now()}`); // Nombre único
+  const tempProjectPath = path.join(__dirname, `temp_${Date.now()}`); 
 
   try {
     // Verificar que la plantilla existe

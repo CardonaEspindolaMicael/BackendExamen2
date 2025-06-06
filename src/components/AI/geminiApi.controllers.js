@@ -248,113 +248,200 @@ ${JSON.stringify(htmlCode, null, 2)}`;
 };
 export async function getZipGenerate(req, res) {
   const { dartCode } = req.body;
-
+  
   const templatePath = path.join(__dirname, "flutter");
-  const tempProjectPath = path.join(__dirname, `temp_${Date.now()}`); 
-
+  const tempProjectPath = path.join(__dirname, `temp_${Date.now()}`);
+  
   try {
-    // Verificar que la plantilla existe
+    // Validate that dartCode is an array
+    if (!Array.isArray(dartCode)) {
+      return res.status(400).json({ error: "dartCode must be an array of page objects" });
+    }
+
+    // Verify template exists
     if (!await fs.pathExists(templatePath)) {
       return res.status(500).json({ error: "Template folder not found" });
     }
 
-    // Copiar plantilla
+    // Copy template
     await fs.copy(templatePath, tempProjectPath);
-    console.log("Plantilla copiada de:", templatePath);
-    console.log("A carpeta temporal:", tempProjectPath);
+    console.log("Template copied from:", templatePath);
+    console.log("To temp folder:", tempProjectPath);
 
-    // Buscar la ruta correcta de main.dart
-    const mainPath = path.join(tempProjectPath, "lib", "main.dart");
-    console.log("Ruta de main.dart:", mainPath);
-
-    // Verificar si existe main.dart
-    if (!await fs.pathExists(mainPath)) {
-      console.log("main.dart no encontrado en lib/, buscando en subcarpetas...");
+    // Find the correct lib folder path
+    let libPath = path.join(tempProjectPath, "lib");
+    
+    if (!await fs.pathExists(libPath)) {
+      console.log("lib/ not found in root, searching in subfolders...");
       
-      // Buscar en posibles ubicaciones
       const possiblePaths = [
-        path.join(tempProjectPath, "my_skeleton", "lib", "main.dart"),
-        path.join(tempProjectPath, "flutter_app", "lib", "main.dart")
+        path.join(tempProjectPath, "my_skeleton", "lib"),
+        path.join(tempProjectPath, "flutter_app", "lib")
       ];
       
-      let foundPath = null;
+      let foundLibPath = null;
       for (const possiblePath of possiblePaths) {
         if (await fs.pathExists(possiblePath)) {
-          foundPath = possiblePath;
+          foundLibPath = possiblePath;
           break;
         }
       }
       
-      if (!foundPath) {
-        throw new Error("No se encontró main.dart en la estructura del proyecto");
+      if (!foundLibPath) {
+        throw new Error("No lib folder found in project structure");
       }
       
-      console.log("main.dart encontrado en:", foundPath);
-      await fs.writeFile(foundPath, dartCode, "utf8");
-    } else {
-      await fs.writeFile(mainPath, dartCode, "utf8");
+      libPath = foundLibPath;
     }
 
-    console.log("Archivo main.dart actualizado correctamente");
+    console.log("lib folder found at:", libPath);
 
-    // Configurar headers
+    // Create pages directory
+    const pagesPath = path.join(libPath, "pages");
+    await fs.ensureDir(pagesPath);
+
+    // Generate individual page files
+    const pageImports = [];
+    const routeEntries = [];
+
+    for (const page of dartCode) {
+      const { id, name, flutterCode } = page;
+      
+      // Create filename from class name or id
+      const className = extractClassName(flutterCode) || toPascalCase(name) || toPascalCase(id);
+      const fileName = toSnakeCase(className) + '.dart';
+      const filePath = path.join(pagesPath, fileName);
+      
+      // Write page file
+      await fs.writeFile(filePath, flutterCode, "utf8");
+      
+      // Add to imports and routes
+      pageImports.push(`import 'pages/${fileName}';`);
+      routeEntries.push(`  '/${toKebabCase(id)}': (context) => ${className}(),`);
+      
+      console.log(`Created page file: ${fileName} for ${name}`);
+    }
+
+    // Generate main.dart with routing
+    const mainDartContent = generateMainDart(pageImports, routeEntries, dartCode[0]);
+    
+    // Write main.dart
+    const mainPath = path.join(libPath, "main.dart");
+    await fs.writeFile(mainPath, mainDartContent, "utf8");
+    
+    console.log("main.dart updated with routing successfully");
+
+    // Set headers
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", "attachment; filename=flutter_project.zip");
 
-    // Crear el ZIP usando Promise para manejar correctamente la finalización
+    // Create ZIP
     await new Promise((resolve, reject) => {
       const archive = archiver("zip", { zlib: { level: 9 } });
       
-      // Manejar errores del archive
       archive.on('error', (err) => {
-        console.error('Error en archive:', err);
+        console.error('Archive error:', err);
         reject(err);
       });
-
-      // Manejar warnings del archive
+      
       archive.on('warning', (err) => {
-        console.warn('Warning en archive:', err);
+        console.warn('Archive warning:', err);
       });
-
-      // Cuando termine de escribir todos los datos
+      
       archive.on('end', () => {
         console.log('Archive finalized successfully');
         console.log('Total bytes:', archive.pointer());
         resolve();
       });
-
-      // Pipe al response
+      
       archive.pipe(res);
-
-      // Agregar el directorio al ZIP
       archive.directory(tempProjectPath, false);
-
-      // Finalizar el archive
       archive.finalize();
     });
 
-    console.log("ZIP enviado correctamente");
-
+    console.log("ZIP sent successfully");
+    
   } catch (err) {
-    console.error("Error en getZipGenerate:", err);
+    console.error("Error in getZipGenerate:", err);
     
     if (!res.headersSent) {
-      res.status(500).json({ 
-        error: "Error al generar el proyecto", 
-        details: err.message 
+      res.status(500).json({
+        error: "Error generating project",
+        details: err.message
       });
     }
   } finally {
-    // Limpieza siempre se ejecuta
+    // Cleanup
     if (await fs.pathExists(tempProjectPath)) {
       setTimeout(async () => {
         try {
           await fs.remove(tempProjectPath);
-          console.log("Carpeta temporal eliminada:", tempProjectPath);
+          console.log("Temp folder deleted:", tempProjectPath);
         } catch (cleanupError) {
-          console.error("Error al limpiar:", cleanupError);
+          console.error("Cleanup error:", cleanupError);
         }
-      }, 2000); // 2 segundos de delay
+      }, 2000);
     }
   }
+}
+
+// Helper function to extract class name from Flutter code
+function extractClassName(flutterCode) {
+  const match = flutterCode.match(/class\s+(\w+)\s+extends/);
+  return match ? match[1] : null;
+}
+
+// Helper function to convert string to PascalCase
+function toPascalCase(str) {
+  return str
+    .replace(/[^a-zA-Z0-9]/g, ' ')
+    .split(' ')
+    .filter(word => word.length > 0)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join('');
+}
+
+// Helper function to convert string to snake_case
+function toSnakeCase(str) {
+  return str
+    .replace(/([A-Z])/g, '_$1')
+    .toLowerCase()
+    .replace(/^_/, '');
+}
+
+// Helper function to convert string to kebab-case
+function toKebabCase(str) {
+  return str
+    .replace(/[^a-zA-Z0-9]/g, '-')
+    .toLowerCase()
+    .replace(/^-+|-+$/g, '');
+}
+
+// Generate main.dart content with routing
+function generateMainDart(pageImports, routeEntries, firstPage) {
+  const firstPageClassName = extractClassName(firstPage.flutterCode) || 'HomePage';
+  
+  return `import 'package:flutter/material.dart';
+${pageImports.join('\n')}
+
+void main() {
+  runApp(MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      title: 'Flutter Demo',
+      theme: ThemeData(
+        primarySwatch: Colors.blue,
+        visualDensity: VisualDensity.adaptivePlatformDensity,
+      ),
+      home: ${firstPageClassName}(),
+      routes: {
+${routeEntries.join('\n')}
+      },
+    );
+  }
+}`;
 }

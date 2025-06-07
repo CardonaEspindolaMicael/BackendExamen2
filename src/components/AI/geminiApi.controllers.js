@@ -5,6 +5,7 @@ import fs from "fs-extra";
 import path from "path";
 import archiver from "archiver";
 import { fileURLToPath } from "url";
+import { extractClassName, generateMainDart, toKebabCase, toPascalCase, toSnakeCase } from "../../helpers/flutterHelp.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -104,6 +105,8 @@ export const postHtmlToDart = async (req, res) => {
   try {
     const { apiKey } = req.params;
     const { htmlCode } = req.body;
+    console.log(apiKey)
+    console.log(htmlCode)
 
     // Validate input
     if (!htmlCode || !Array.isArray(htmlCode)) {
@@ -124,15 +127,15 @@ export const postHtmlToDart = async (req, res) => {
     const ai = new GoogleGenAI({ apiKey });
 
     // Create the enhanced Gemini prompt
-    const prompt = `You are an expert Flutter developer. Convert the following HTML/CSS pages into Flutter Dart code.
+const prompt = `You are an expert Flutter developer. Convert the following HTML/CSS pages into Flutter Dart code.
 
 **INPUT FORMAT:**
-I will provide a JSON array with pages in this format:
+I will provide a JSON array of page objects:
 [
   {
     "id": "page-1",
-    "name": "Home Page", 
-    "html": "<body>...HTML content...</body>",
+    "name": "Home Page",
+    "html": "<body>...</body>",
     "css": "...CSS content..."
   }
 ]
@@ -140,61 +143,66 @@ I will provide a JSON array with pages in this format:
 **CONVERSION RULES:**
 
 1. **HTML to Flutter Widget Mapping:**
-   - <div> → Container, Column, Row (based on CSS classes)
-   - <input> → TextField, TextFormField
-   - <button> → ElevatedButton, OutlinedButton, TextButton
-   - <label> → Text widget
-   - <span> → Text widget
-   - <svg> → Icon widget or custom painter
+   - <div> → Column, Row, Container (decide based on flex/grid class)
+   - <input> → TextField (never place inside Expanded directly)
+   - <button> → ElevatedButton or TextButton
+   - <label>, <span> → Text
+   - <svg> → Prefer placeholder Icon(Icons.image) unless clearly defined
 
-2. **CSS/Tailwind to Flutter Styling:**
-   - flex → Column/Row with MainAxis/CrossAxis alignment
-   - bg-color → Container decoration with color
-   - text-color → TextStyle color
-   - padding/margin → EdgeInsets
-   - border-radius → BorderRadius
-   - shadow → BoxShadow
-   - Media queries → MediaQuery.of(context).size.width conditions
+2. **Styling:**
+   - Map CSS styles to Flutter equivalents using:
+     - color → Color(...)
+     - padding/margin → EdgeInsets
+     - flex → Row/Column + MainAxisAlignment/CrossAxisAlignment
+     - border-radius → BorderRadius.circular
+     - font styles → TextStyle
+     - shadows → BoxShadow
+   - If Tailwind classes exist, infer intent (e.g., bg-blue-500 → Colors.blue.shade500)
 
-3. **Layout Guidelines:**
-   - Use Scaffold as root widget
-   - Wrap content in SafeArea if needed
-   - Use SingleChildScrollView for scrollable content
-   - Implement responsive design with MediaQuery
-   - Use proper Flutter color constants (Colors.blue, Color(0xFF...))
+3. **Layout Rules:**
+   - Use Scaffold as root widget.
+   - Wrap body with SafeArea.
+   - Wrap long content with SingleChildScrollView.
+   - For horizontal/vertical layouts, ensure:
+     - Use Flexible or Expanded only when inside Row/Column and with proper sibling balance.
+     - Avoid nesting Expanded directly inside Padding.
 
-4. **Code Quality:**
-   - Use StatelessWidget unless state management is clearly needed
-   - Add proper imports
-   - Use meaningful widget names based on page names
-   - Add basic comments for complex layouts
-   - Follow Flutter naming conventions (PascalCase for classes)
+4. **Error-Prevention:**
+   - Do NOT place Expanded around TextField unless wrapped properly in a Row with clear constraints.
+   - Always close Containers and parent widgets properly.
+   - Make sure every widget has required params.
+   - Avoid overflow by using Flexible, Wrap, or Expanded responsibly.
 
-**OUTPUT FORMAT:**
-Return ONLY a valid JSON array (no markdown, no explanation):
+5. **Responsive Design:**
+   - Use MediaQuery.of(context).size for width/height calculations if needed.
+   - Use LayoutBuilder for dynamic layouts if breakpoint-based behavior is detected.
+   - Use Flexible or Wrap instead of fixed widths when in doubt.
 
-[
-  {
-    "id": "page-1",
-    "name": "Home Page",
-    "flutterCode": "import 'package:flutter/material.dart'; class HomePage extends StatelessWidget { @override Widget build(BuildContext context) { return Scaffold( body: SafeArea( child: // your widgets here ), ); } }"
-  }
-]
+6. **Output Format:**
+   Return a JSON array like:
+   [
+     {
+       "id": "page-1",
+       "name": "Home Page",
+       "flutterCode": "import 'package:flutter/material.dart'; class HomePage extends StatelessWidget { @override Widget build(BuildContext context) { return Scaffold( body: SafeArea( child: SingleChildScrollView( child: Column( children: [ Container( padding: EdgeInsets.all(16), child: Text('Example') ) ] ) ) ) ); } }"
+     }
+   ]
 
-**IMPORTANT:** 
-- Return Flutter code as a SINGLE LINE string with NO line breaks or \\n characters
-- Use single spaces between code elements instead of newlines
-- Escape quotes as \\" only
-- Make responsive layouts using MediaQuery
-- Don't add extra explanations, just return the JSON array
-- Keep all Flutter code in one continuous line per flutterCode field
+**IMPORTANT:**
+- Return ONLY a valid JSON array (no markdown, no explanation).
+- Return flutterCode as a SINGLE LINE string (no \n or line breaks).
+- Use single spaces between code tokens.
+- Escape all quotes as \\" inside the string.
+- No trailing characters, headers, or explanations.
+- Validate that Flutter code is syntactically correct and free of common layout/compile errors.
 
 **INPUT DATA TO CONVERT:**
 ${JSON.stringify(htmlCode, null, 2)}`;
 
+
     // Generate content from Gemini (using same pattern as your imgToHtml)
     const response = await ai.models.generateContent({
-      model: "gemini-1.5-flash", // or "gemini-2.0-flash" if that's what works for you
+      model: "gemini-2.0-flash", // or "gemini-2.0-flash" if that's what works for you
       contents: [{ text: prompt }],
     });
     let generatedText = response.text;
@@ -383,65 +391,4 @@ export async function getZipGenerate(req, res) {
       }, 2000);
     }
   }
-}
-
-// Helper function to extract class name from Flutter code
-function extractClassName(flutterCode) {
-  const match = flutterCode.match(/class\s+(\w+)\s+extends/);
-  return match ? match[1] : null;
-}
-
-// Helper function to convert string to PascalCase
-function toPascalCase(str) {
-  return str
-    .replace(/[^a-zA-Z0-9]/g, ' ')
-    .split(' ')
-    .filter(word => word.length > 0)
-    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join('');
-}
-
-// Helper function to convert string to snake_case
-function toSnakeCase(str) {
-  return str
-    .replace(/([A-Z])/g, '_$1')
-    .toLowerCase()
-    .replace(/^_/, '');
-}
-
-// Helper function to convert string to kebab-case
-function toKebabCase(str) {
-  return str
-    .replace(/[^a-zA-Z0-9]/g, '-')
-    .toLowerCase()
-    .replace(/^-+|-+$/g, '');
-}
-
-// Generate main.dart content with routing
-function generateMainDart(pageImports, routeEntries, firstPage) {
-  const firstPageClassName = extractClassName(firstPage.flutterCode) || 'HomePage';
-  
-  return `import 'package:flutter/material.dart';
-${pageImports.join('\n')}
-
-void main() {
-  runApp(MyApp());
-}
-
-class MyApp extends StatelessWidget {
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'Flutter Demo',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
-      ),
-      home: ${firstPageClassName}(),
-      routes: {
-${routeEntries.join('\n')}
-      },
-    );
-  }
-}`;
 }

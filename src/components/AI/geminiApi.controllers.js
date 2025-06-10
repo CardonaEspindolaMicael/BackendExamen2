@@ -242,7 +242,7 @@ ${JSON.stringify(htmlCode, null, 2)}`;
         response: parsedResponse
       });
     }
-
+    parsedResponse = await correctDartCode(parsedResponse, apiKey);
     // Send the parsed response
     res.json(parsedResponse);
 
@@ -525,5 +525,57 @@ Important:
       error: "Failed to process code",
       details: error.message
     });
+  }
+};
+
+export const correctDartCode = async (dartResponse, apiKey) => {
+  try {
+    if (!dartResponse || !Array.isArray(dartResponse)) {
+      throw new Error("dartResponse must be an array");
+    }
+
+    if (!apiKey) {
+      throw new Error("API key is required");
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const correctedPages = [];
+
+    // Procesar cada página individualmente
+    for (const page of dartResponse) {
+      const { id, name, flutterCode } = page;
+
+      const correctionPrompt = `Corrige este código Flutter Dart y devuelve SOLO el código corregido sin explicaciones ni markdown:
+
+${flutterCode}
+- Return ONLY a valid JSON array (no markdown, no explanation).
+- Return flutterCode as a SINGLE LINE string (no \n or line breaks).
+
+Corrige errores de sintaxis, layout, widgets mal usados, y mejora el código siguiendo las mejores prácticas de Flutter. Devuelve el código en una sola línea.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: [{ text: correctionPrompt }],
+      });
+
+      let correctedCode = response.text.trim();
+      
+      // Limpiar markdown si existe
+      correctedCode = correctedCode.replace(/```dart\n?/g, '').replace(/```\n?/g, '').trim();
+
+      // Reagregar al array con la misma estructura
+      correctedPages.push({
+        id,
+        name,
+        flutterCode: correctedCode
+      });
+    }
+    console.log(correctedPages)
+    return correctedPages;
+    
+
+  } catch (error) {
+    console.error("Error correcting Dart code:", error);
+    throw error;
   }
 };

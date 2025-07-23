@@ -549,9 +549,8 @@ export const correctDartCode = async (dartResponse, apiKey) => {
 
 ${flutterCode}
 - Return ONLY a valid JSON array (no markdown, no explanation).
-- Return flutterCode as a SINGLE LINE string (no \n or line breaks).
 
-Corrige errores de sintaxis, layout, widgets mal usados, y mejora el código siguiendo las mejores prácticas de Flutter. Devuelve el código en una sola línea.`;
+Corrige errores de sintaxis, layout, widgets mal usados, y mejora el código siguiendo las mejores prácticas de Flutter`;
 
       const response = await ai.models.generateContent({
         model: "gemini-2.0-flash",
